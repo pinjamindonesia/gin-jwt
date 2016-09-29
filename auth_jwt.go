@@ -105,10 +105,6 @@ func (mw *GinJWTMiddleware) MiddlewareInit() error {
 		return errors.New("realm is required")
 	}
 
-	if mw.Authenticator == nil {
-		return errors.New("authenticator is required")
-	}
-
 	if mw.Key == nil {
 		return errors.New("secret key is required")
 	}
@@ -133,17 +129,20 @@ func (mw *GinJWTMiddleware) MiddlewareFunc() gin.HandlerFunc {
 
 func (mw *GinJWTMiddleware) middlewareImpl(c *gin.Context) {
 	token, err := mw.parseToken(c)
-
+	
 	if err != nil {
 		mw.unauthorized(c, http.StatusUnauthorized, err.Error())
 		return
 	}
-
+	
 	claims := token.Claims.(jwt.MapClaims)
-
+	if claims["id"] == nil {
+		mw.unauthorized(c, http.StatusForbidden, "You don't have permission to access.")
+		return
+	}
+	
 	id := claims["id"].(string)
 	c.Set("JWT_PAYLOAD", claims)
-	c.Set("userID", id)
 
 	if !mw.Authorizator(id, c) {
 		mw.unauthorized(c, http.StatusForbidden, "You don't have permission to access.")
@@ -316,30 +315,32 @@ func (mw *GinJWTMiddleware) jwtFromCookie(c *gin.Context, key string) (string, e
 }
 
 func (mw *GinJWTMiddleware) parseToken(c *gin.Context) (*jwt.Token, error) {
-	var token string
+	var tokenString string
 	var err error
 
 	parts := strings.Split(mw.TokenLookup, ":")
 	switch parts[0] {
 	case "header":
-		token, err = mw.jwtFromHeader(c, parts[1])
+		tokenString, err = mw.jwtFromHeader(c, parts[1])
 	case "query":
-		token, err = mw.jwtFromQuery(c, parts[1])
+		tokenString, err = mw.jwtFromQuery(c, parts[1])
 	case "cookie":
-		token, err = mw.jwtFromCookie(c, parts[1])
+		tokenString, err = mw.jwtFromCookie(c, parts[1])
 	}
 
 	if err != nil {
 		return nil, err
 	}
 
-	return jwt.Parse(token, func(token *jwt.Token) (interface{}, error) {
+	tokenVerified, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if jwt.GetSigningMethod(mw.SigningAlgorithm) != token.Method {
 			return nil, errors.New("invalid signing algorithm")
 		}
 
 		return mw.Key, nil
 	})
+
+	return tokenVerified, nil
 }
 
 func (mw *GinJWTMiddleware) unauthorized(c *gin.Context, code int, message string) {
